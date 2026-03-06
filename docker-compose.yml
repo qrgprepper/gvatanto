@@ -1,0 +1,12 @@
+services:
+  gvatanto:
+    build: .
+    container_name: gvatanto-osint
+    volumes:
+      - ./data:/app/data
+    env_file:
+      - .env
+    environment:
+      - GVATANTO_DB_PATH=/app/data/gvatanto.db
+    # O comando padrão pode ser alterado para rodar o scan em loop ou o scan uma vez
+    command: python main.py scan
