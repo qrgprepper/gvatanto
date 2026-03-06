@@ -3,6 +3,8 @@ import os
 import argparse
 import sqlite3
 import webbrowser
+import shlex
+import sys
 import database
 import collector
 import ai_analyzer
@@ -104,16 +106,10 @@ def run_scan():
         print(f"Título: {item['titulo']}")
         print(f"Fonte: {item['fonte']}")
         
-        # Tenta mapear o link de volta para o source_id original
-        # Collector.py atualmente não retorna a URL do feed, apenas o nome da fonte extraído do feed
-        # Como as URLs são únicas, podemos tentar inferir ou ajustar o collector
-        # Simplificação: Usaremos o primeiro source_id que corresponda se necessário, 
-        # mas aqui passaremos o que temos.
-        # Idealmente o collector deveria retornar o feed_url original.
-        # Por agora, usaremos 0 ou tentaremos encontrar nos urls.
+        # Heurística simples para encontrar o source_id
         sid = 0
         for f_url, f_id in source_ids.items():
-            if f_url in link: # Heurística simples
+            if f_url in link:
                 sid = f_id
                 break
 
@@ -231,59 +227,132 @@ def list_sitreps(limit=5):
         console.print(panel)
         console.print("\n")
 
-def main():
-    database.setup_database()
-    migrate_config_to_db()
-    parser = argparse.ArgumentParser(description="Gvatanto OSINT")
-    subparsers = parser.add_subparsers(dest="command", help="Comandos")
+def setup_parser():
+    """Configura o parser de argumentos."""
+    parser = argparse.ArgumentParser(description="Gvatanto OSINT", prog="sentinel")
+    subparsers = parser.add_subparsers(dest="command", help="Comandos disponíveis")
 
-    subparsers.add_parser("scan", help="Scan de novos alertas")
+    # Comando scan
+    subparsers.add_parser("scan", help="Executa scan de novos alertas em fontes RSS")
 
-    list_p = subparsers.add_parser("list", help="Lista alertas")
-    list_p.add_argument("--limit", type=int, default=10)
-    list_p.add_argument("--nivel", choices=["VERDE", "AMARELO", "LARANJA", "VERMELHO"])
-    list_p.add_argument("--unread", action="store_true", help="Mostrar apenas alertas não lidos")
+    # Comando list
+    list_p = subparsers.add_parser("list", help="Lista alertas coletados")
+    list_p.add_argument("--limit", type=int, default=10, help="Limite de alertas")
+    list_p.add_argument("--nivel", choices=["VERDE", "AMARELO", "LARANJA", "VERMELHO"], help="Filtrar por nível")
+    list_p.add_argument("--unread", action="store_true", help="Mostrar apenas não lidos")
 
-    show_p = subparsers.add_parser("show", help="Detalhes do alerta")
-    show_p.add_argument("id", type=int)
+    # Comando show
+    show_p = subparsers.add_parser("show", help="Exibe detalhes de um alerta específico")
+    show_p.add_argument("id", type=int, help="ID do alerta")
 
-    open_p = subparsers.add_parser("open", help="Abrir link no browser")
-    open_p.add_argument("id", type=int)
+    # Comando open
+    open_p = subparsers.add_parser("open", help="Abre o link do alerta no navegador")
+    open_p.add_argument("id", type=int, help="ID do alerta")
 
-    sit_p = subparsers.add_parser("sitrep", help="Relatório situacional")
+    # Comando sitrep
+    sit_p = subparsers.add_parser("sitrep", help="Gera ou visualiza relatórios situacionais")
     sit_p.add_argument("--hours", type=int, default=24, help="Janela de horas para novo relatório")
-    sit_p.add_argument("--history", action="store_true", help="Ver histórico de relatórios salvos")
+    sit_p.add_argument("--history", action="store_true", help="Ver histórico de relatórios")
     sit_p.add_argument("--limit", type=int, default=5, help="Limite de relatórios no histórico")
 
-    src_p = subparsers.add_parser("source", help="Gerenciar fontes")
+    # Comando source
+    src_p = subparsers.add_parser("source", help="Gerencia fontes de dados RSS")
     src_sub = src_p.add_subparsers(dest="source_command")
     
-    add_p = src_sub.add_parser("add", help="Adicionar fonte")
-    add_p.add_argument("url")
-    add_p.add_argument("--nome")
+    add_p = src_sub.add_parser("add", help="Adiciona uma nova fonte")
+    add_p.add_argument("url", help="URL do feed RSS")
+    add_p.add_argument("--nome", help="Nome amigável da fonte")
     
-    src_sub.add_parser("list", help="Listar fontes")
+    src_sub.add_parser("list", help="Lista todas as fontes cadastradas")
     
-    rem_p = src_sub.add_parser("remove", help="Remover fonte")
-    rem_p.add_argument("id", type=int)
+    rem_p = src_sub.add_parser("remove", help="Remove uma fonte pelo ID")
+    rem_p.add_argument("id", type=int, help="ID da fonte")
 
-    args = parser.parse_args()
+    return parser
 
-    if args.command == "scan": run_scan()
-    elif args.command == "list": list_alerts(args.limit, args.nivel, args.unread)
-    elif args.command == "show": show_alert(args.id)
-    elif args.command == "open": open_alert_link(args.id)
+def execute_command(args, parser):
+    """Executa o comando baseado nos argumentos parseados."""
+    if args.command == "scan": 
+        run_scan()
+    elif args.command == "list": 
+        list_alerts(args.limit, args.nivel, args.unread)
+    elif args.command == "show": 
+        show_alert(args.id)
+    elif args.command == "open": 
+        open_alert_link(args.id)
     elif args.command == "sitrep":
         if args.history:
             list_sitreps(args.limit)
         else:
             run_sitrep(args.hours)
     elif args.command == "source":
-        if args.source_command == "add": add_source(args.url, args.nome)
-        elif args.source_command == "list": list_sources()
-        elif args.source_command == "remove": remove_source(args.id)
-        else: src_p.print_help()
-    else: parser.print_help()
+        if args.source_command == "add": 
+            add_source(args.url, args.nome)
+        elif args.source_command == "list": 
+            list_sources()
+        elif args.source_command == "remove": 
+            remove_source(args.id)
+        else: 
+            # Emula a chamada de help para o subcomando source
+            try:
+                parser.parse_args(["source", "--help"])
+            except SystemExit:
+                pass
+    else: 
+        parser.print_help()
+
+import banner
+
+def main():
+    database.setup_database()
+    migrate_config_to_db()
+    parser = setup_parser()
+
+    # Exibe o Splash Screen com o Banner
+    console.print(f"[bold cyan]{banner.BANNER}[/bold cyan]")
+    
+    console.print(Panel.fit(
+        "[bold cyan]Gvatanto OSINT - Terminal Interativo[/bold cyan]\n"
+        "Digite [bold green]help[/bold green] para ver comandos ou [bold red]exit[/bold red] para sair.",
+        border_style="cyan"
+    ))
+
+    while True:
+        try:
+            # Captura de entrada segura com Rich
+            user_input = console.input("[bold magenta]sentinel@osint > [/bold magenta]").strip()
+
+            if not user_input:
+                continue
+
+            if user_input.lower() in ["exit", "quit", "sair"]:
+                console.print("[yellow]Encerrando conexões e saindo...[/yellow]")
+                break
+
+            # Parseamento inteligente com shlex para suportar aspas
+            try:
+                args_list = shlex.split(user_input)
+            except ValueError as e:
+                console.print(f"[red]Erro de sintaxe: {e}[/red]")
+                continue
+            
+            # Tratamento de exceções do argparse (SystemExit não deve fechar o loop)
+            try:
+                # Se o usuário digitar 'help', passamos '--help' para o argparse
+                if args_list == ["help"]:
+                    args_list = ["--help"]
+                
+                args = parser.parse_args(args_list)
+                execute_command(args, parser)
+            except SystemExit:
+                # O argparse lança SystemExit ao rodar --help ou erro, capturamos para manter o REPL vivo
+                continue
+
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Interrupção detectada. Saindo graciosamente...[/yellow]")
+            break
+        except Exception as e:
+            console.print(f"[red]Erro inesperado no loop principal: {e}[/red]")
 
 if __name__ == "__main__":
     main()
